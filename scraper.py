@@ -1,47 +1,74 @@
-import pandas as pd
+import os
 import requests
+from bs4 import BeautifulSoup
+import pandas as pd
 
-# 1. 直接鎖定 ABS 官方 Table 17 乾淨版資料的固定下載連結 (Data Cube)
-# 這個網址對應的就是你下載並上傳給我的那份 "All groups CPI, Index numbers(a).xlsx"
-excel_url = "https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia/latest-release/6401017.xlsx"
-
-# 備用網址：如果上面因為月份網址變動，我們使用最新發布的直接下載點
-# 根據 ABS 規則，這條連結通常會自動導向最新的發布版本
-print(f"確認直接下載 Table 17 檔案: {excel_url}")
-
+# 1. 定義 ABS CPI 網頁網址
+URL = "https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/consumer-price-index-australia/latest-release"
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# 2. 下載並讀取指定的工作表 (你說的 Sheet1)
+print("正在解析 ABS 網頁，尋找【All groups CPI, Index numbers(a)】...")
+response = requests.get(URL, headers=headers)
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# 2. 精準尋找符合你上傳檔案名稱的 Excel 下載連結
+excel_url = None
+for link in soup.find_all('a', href=True):
+    href = link['href']
+    link_text = link.get_text()
+    
+    # 只要超連結文字包含 "All groups CPI" 或是 "Index numbers" 且是 xlsx 結尾
+    if href.endswith('.xlsx') and ('all groups cpi' in link_text.lower() or 'index numbers' in link_text.lower()):
+        if href.startswith('http'):
+            excel_url = href
+        else:
+            excel_url = "https://www.abs.gov.au" + href
+        break
+
+# 備用安全機制：如果依照文字找不到，改找包含 "17" 且是 xlsx 的連結
+if not excel_url:
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.endswith('.xlsx') and '17' in href:
+            if href.startswith('http'):
+                excel_url = href
+            else:
+                excel_url = "https://www.abs.gov.au" + href
+            break
+
+if not excel_url:
+    raise Exception("在網頁上找不到對應的 Excel 下載連結！")
+
+print(f"成功鎖定 Excel 連結: {excel_url}")
+
+# 3. 下載並指定讀取 Sheet1
 print("正在下載並讀取 Sheet1...")
-# 根據你提供的檔案結構，第一行是標題 "All groups CPI, Index numbers(a)"，所以我們跳過 1 行 (skiprows=1)
-# 這樣第二行 (Period, Sydney...) 就會自動變成標準表頭！
+# 根據你提供的結構，第一行是 "All groups CPI, Index numbers(a)"，跳過 1 行讓 Period 變成表頭
 df = pd.read_excel(excel_url, sheet_name='Sheet1', skiprows=1)
 
-# 清除欄位名稱前後可能存在的隱形空格
+# 清除欄位名稱前後的空格
 df.columns = df.columns.str.strip()
 
-print(f"目前成功讀取到的欄位有：{list(df.columns[:3])} ... {list(df.columns[-1:])}")
-
-# 3. 精準鎖定目標欄位
+# 4. 精準鎖定目標欄位
 target_col = 'Weighted average of eight capital cities'
 
 if target_col not in df.columns:
-    # 預防萬一，如果名字有些微差異，用關鍵字去撈
+    # 備用：如果名稱有極細微文字差異
     possible_cols = [col for col in df.columns if 'Weighted average' in str(col)]
     if possible_cols:
         target_col = possible_cols[0]
     else:
         raise Exception(f"在 Sheet1 中找不到 '{target_col}'！目前的欄位是：{list(df.columns)}")
 
-# 4. 建立只包含季度和加權平均值的乾淨 DataFrame，並丟棄空行
+# 5. 建立乾淨的 DataFrame，並丟棄空行
 df_clean = df[['Period', target_col]].dropna()
 
-# 5. 清洗資料，只留下正確的季度格式列（例如 2025 September）
+# 6. 清洗資料，只留下正確的季度格式列
 df_clean = df_clean[df_clean['Period'].astype(str).str.contains('March|June|September|December', case=False, na=False)]
 
-# 6. 儲存成 CSV
+# 7. 儲存成 CSV
 output_file = 'cpi_australia.csv'
 df_clean.to_csv(output_file, index=False)
 print(f"🎉【大功告成】資料已成功抓取，並精準儲存至 {output_file}！")
