@@ -31,32 +31,54 @@ if not excel_url:
 
 print(f"成功找到 Excel 連結: {excel_url}")
 
-# 3. 下載並讀取 Excel 資料
+# 3. 下載並讀取 Excel 資料 (這次不跳行讀取，保留前幾行的文字標題)
 print("正在下載並解析 Excel 資料...")
-# 關鍵修正：指定讀取 'Data1' 工作表，並跳過前 9 行（ABS 標準時間序列格式的表頭宣告）
-df = pd.read_excel(excel_url, sheet_name='Data1', skiprows=9)
+df = pd.read_excel(excel_url, sheet_name='Data1')
 
-# 重新命名第一欄為 Period (時間欄位)
+# 4. 尋找含有 "Weighted average" 文字的那一行作為標題
+header_row_index = None
+target_col_name = None
+
+# 掃描前 15 行，找出哪一行包含了我們要的關鍵字
+for i in range(min(15, len(df))):
+    row_values = df.iloc[i].astype(str).tolist()
+    for val in row_values:
+        if 'Weighted average' in val:
+            header_row_index = i
+            break
+    if header_row_index is not None:
+        break
+
+if header_row_index is not None:
+    print(f"成功在第 {header_row_index + 1} 行找到文字表頭！正在重構表格...")
+    # 將那一行設為新的欄位名稱
+    df.columns = df.iloc[header_row_index]
+    # 把表頭之前和那一行本身的雜訊刪除，只留下後面的數據
+    df = df.iloc[header_row_index + 1:].reset_index(drop=True)
+else:
+    # 如果真的沒找到，就嘗試拿第一行（對應你上傳的 CSV 結構）
+    df.columns = df.iloc[0]
+    df = df[1:].reset_index(drop=True)
+
+# 重新命名第一欄為 Period
 df.rename(columns={df.columns[0]: 'Period'}, inplace=True)
 
-# 4. 精準篩選我們需要的兩欄
+# 5. 精準篩選我們需要的兩欄
 target_col = 'Weighted average of eight capital cities'
-
-# 預防萬一欄位名稱前後有空格，先用關鍵字搜尋包含 "Weighted average" 的欄位
 possible_cols = [col for col in df.columns if 'Weighted average' in str(col)]
 
 if possible_cols:
     target_col = possible_cols[0]
 else:
-    raise Exception(f"在 Data1 中依舊找不到對應的欄位！目前的欄位有：{list(df.columns[:3])} 等...")
+    raise Exception(f"重構後依舊找不到對應欄位，目前的欄位有：{list(df.columns[:3])}")
 
-# 重新建立一個乾淨的 DataFrame，只留下季度和加權平均值
+# 建立乾淨的 DataFrame
 df_clean = df[['Period', target_col]].dropna()
 
-# 5. 清洗資料，只留下正確的季度格式列
+# 6. 清洗資料，只留下正確的季度格式列 (例如 2025 September)
 df_clean = df_clean[df_clean['Period'].astype(str).str.contains('March|June|September|December', case=False, na=False)]
 
-# 6. 儲存成 CSV
+# 7. 儲存成 CSV
 output_file = 'cpi_australia.csv'
 df_clean.to_csv(output_file, index=False)
 print(f"【成功】資料已精準更新並儲存至 {output_file}！")
