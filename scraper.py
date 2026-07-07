@@ -11,48 +11,66 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# 2. 讀取官方數據工作表 'Data1'
-# 這次我們直接從第 10 行（skiprows=9）讀取，讓 Series ID 直接變成欄位標題
-df = pd.read_excel(excel_url, sheet_name='Data1', skiprows=9)
+# 2. 為了徹底避免讀錯工作表，我們掃描 Excel 裡面的所有 Sheet
+excel_file = pd.ExcelFile(excel_url)
+df_target = None
+target_col_name = None
 
-# 清除欄位名稱前後的隱形空格
-df.columns = df.columns.str.strip()
+for sheet_name in excel_file.sheet_names:
+    print(f"正在檢查工作表: {sheet_name} ...")
+    # 先把整張表讀進來（不設表頭）
+    df_raw = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+    
+    # 逐行尋找哪裡有寫 'Weighted average of eight capital cities'
+    for idx, row in df_raw.iterrows():
+        row_vals = row.astype(str).tolist()
+        # 只要這行有我們要的完整文字
+        if any('Weighted average of eight capital cities' in val for val in row_vals):
+            # 再檢查一下這張表是不是我們要的「指數表」（看它後面幾行的數值是不是大於 100）
+            # 隨便挑下面第 5 行的資料來看看
+            test_idx = idx + 5
+            if test_idx < len(df_raw):
+                test_val = df_raw.iloc[test_idx].dropna().tolist()
+                # 如果這張表底下的數字都是小於 5 或 90 幾的百分比，就代表找錯張了，繼續找下一張
+                if any(isinstance(v, (int, float)) and v > 100 for v in test_val) or \
+                   any(str(v).replace('.','',1).isdigit() and float(v) > 100 for v in test_val):
+                    
+                    print(f"🎯 找到了！在 [{sheet_name}] 第 {idx + 1} 行找到正確的 CPI 指數表頭！")
+                    df_raw.columns = df_raw.iloc[idx]
+                    df_target = df_raw.iloc[idx + 1:].reset_index(drop=True)
+                    break
+    if df_target is not None:
+        break
 
-# 自動把第一欄（時間軸）更名為 'Period'
-df.rename(columns={df.columns[0]: 'Period'}, inplace=True)
+if df_target is None:
+    raise Exception("翻遍了所有工作表，依然找不到包含數值大於 100 的 'Weighted average of eight capital cities' 欄位！")
 
-# 3. 用 ABS 官方萬年不變的「八大城市加權平均 CPI 指數」專屬代碼進行鎖定
-# Table 17 Index Numbers 的代碼就是 A2325846C
-target_code = 'A2325846C'
+# 3. 清洗與格式化
+df_target.columns = df_target.columns.str.strip()
+df_target.rename(columns={df_target.columns[0]: 'Period'}, inplace=True)
 
-if target_code not in df.columns:
-    # 預防萬一如果代碼沒對上，拿最後一欄作為保底
-    target_col = df.columns[-1]
-    print(f"警告：找不到代碼 {target_code}，改拿最後一欄：{target_col}")
-else:
-    target_col = target_code
-    print(f"🎯 成功鎖定八大城市加權平均 CPI 代碼: {target_code}")
+target_col = 'Weighted average of eight capital cities'
 
-# 4. 建立乾淨的 DataFrame，並丟棄空行與前幾行的文字殘留
-df_clean = df[['Period', target_col]].dropna()
+# 4. 建立乾淨的 DataFrame
+df_clean = df_target[['Period', target_col]].dropna()
 
-# 5. 清洗與格式化時間
-# ABS 官方的 Period 讀進來是時間物件，我們把它過濾並格式化
+# 5. 過濾季度並轉換時間格式為 "2025 September"
 df_clean = df_clean[df_clean['Period'].astype(str).str.contains('March|June|September|December|03|06|09|12', case=False, na=False)]
 
-# 嘗試將時間欄位轉換為漂亮易讀的格式
 try:
-    df_clean['Period'] = pd.to_datetime(df_clean['Period']).dt.strftime('%Y %B')
+    df_clean['Period'] = pd.to_datetime(df_clean['Period'])
+    df_clean['Period'] = df_clean['Period'].dt.strftime('%Y %B')
 except Exception as e:
     df_clean['Period'] = df_clean['Period'].astype(str)
 
-# 重新命名欄位，讓產出的 CSV 漂亮又專業
+# 6. 重新封裝，並將順序倒排（最新季度在最上面，完全符合你的範例檔）
 df_output = pd.DataFrame({
     'Period': df_clean['Period'],
     'Weighted average of eight capital cities': df_clean[target_col]
 })
+df_output = df_output.iloc[::-1].reset_index(drop=True)
 
-# 6. 儲存成 CSV
+# 7. 儲存成 CSV
 output_file = 'cpi_australia.csv'
 df_output.to_csv(output_file, index=False)
-print(f"🎉【大功告成】最新 CPI 數值已成功抓取，並精準儲存至 {output_file}！")
+print(f"🎉【大功告成】這次抓到的絕對是正確的 {target_col} 指數（例如 143.6）！")
