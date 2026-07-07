@@ -31,44 +31,50 @@ if not excel_url:
 
 print(f"成功找到 Excel 連結: {excel_url}")
 
-# 3. 下載並讀取 Excel 資料
-print("正在下載並解析 Excel 資料...")
-# 關鍵修正：ABS 的 Data1 前 9 行是宣告，第 10、11 行是雙層表頭 (header=[0, 1])
-df = pd.read_excel(excel_url, sheet_name='Data1', skiprows=9, header=[0, 1])
+# 3. 讀取 Excel 檔案的所有工作表
+print("正在下載並掃描 Excel 所有工作表...")
+excel_file = pd.ExcelFile(excel_url)
 
-# 4. 尋找符合條件的欄位
-# 我們需要第一層包含 "Weighted average" 且第二層包含 "Index" 的那一欄
-target_tuple = None
-for col in df.columns:
-    top_header = str(col[0])
-    sub_header = str(col[1])
-    if 'Weighted average' in top_header and 'Index' in sub_header:
-        target_tuple = col
+df_target = None
+target_col = 'Weighted average of eight capital cities'
+
+# 逐一檢查每一個工作表，直到找到含有目標欄位的那張表
+for sheet_name in excel_file.sheet_names:
+    # 先不管表頭，整張表直接讀進來
+    df_sheet = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+    
+    # 一行一行掃描，看看有沒有哪一行包含了 "Weighted average of eight capital cities"
+    for idx, row in df_sheet.iterrows():
+        row_str = row.astype(str).tolist()
+        if any(target_col in val for val in row_str):
+            print(f"🎯 找到了！在工作表 [{sheet_name}] 的第 {idx + 1} 行發現目標數據結構。")
+            
+            # 將那一行設定為欄位名稱
+            df_sheet.columns = df_sheet.iloc[idx]
+            # 切下數據區（拋棄上面的廢話標題）
+            df_target = df_sheet.iloc[idx + 1:].reset_index(drop=True)
+            break
+            
+    if df_target is not None:
         break
 
-if not target_tuple:
-    # 預防萬一，如果沒有雙層表頭或文字有微調的備用方案
-    possible_cols = [col for col in df.columns if 'Weighted average' in str(col)]
-    if possible_cols:
-        target_tuple = possible_cols[0]
-    else:
-        raise Exception(f"依然找不到目標欄位。目前的頂層欄位有：{list(set([c[0] for c in df.columns]))}")
+if df_target is None:
+    raise Exception("翻遍了整份 Excel 依舊找不到 'Weighted average of eight capital cities' 的文字欄位！")
 
-print(f"成功鎖定目標雙層欄位: {target_tuple}")
+# 4. 清洗與重構表格
+# 自動把第一欄（不管它叫 Period 還是 Date）統一更名為 'Period'
+df_target.rename(columns={df_target.columns[0]: 'Period'}, inplace=True)
 
-# 5. 建立乾淨的 DataFrame 
-# 第一欄通常是時間 (Period)，我們直接拿 df.columns[0]
-period_col = df.columns[0]
+# 精準剔除欄位名稱前後的隱形空格
+df_target.columns = df_target.columns.str.strip()
 
-df_clean = pd.DataFrame({
-    'Period': df[period_col],
-    'Weighted_Average_CPI': df[target_tuple]
-}).dropna()
+# 建立只包含季度和加權平均值的乾淨 DataFrame
+df_clean = df_target[['Period', target_col]].dropna()
 
-# 6. 清洗資料，只留下正確的季度格式列
+# 5. 清洗季度資料（只留下 March, June, September, December 結尾的資料列）
 df_clean = df_clean[df_clean['Period'].astype(str).str.contains('March|June|September|December', case=False, na=False)]
 
-# 7. 儲存成 CSV
+# 6. 儲存成 CSV
 output_file = 'cpi_australia.csv'
 df_clean.to_csv(output_file, index=False)
-print(f"【成功】資料已精準更新並儲存至 {output_file}！")
+print(f"【大功告成】資料已成功更新並儲存至 {output_file}！")
