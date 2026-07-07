@@ -19,7 +19,6 @@ for link in soup.find_all('a', href=True):
     href = link['href']
     link_text = link.get_text().lower()
     
-    # 只要網址結尾是 xlsx，且超連結文字或網址包含 "17" 
     if href.endswith('.xlsx') and ('17' in href or '17' in link_text):
         if href.startswith('http'):
             excel_url = href
@@ -34,32 +33,27 @@ print(f"成功找到 Excel 連結: {excel_url}")
 
 # 3. 下載並讀取 Excel 資料
 print("正在下載並解析 Excel 資料...")
-# 根據你提供的檔案結構，ABS 資料在讀取時，第一行通常是表頭 "All groups CPI, Index numbers(a)"
-# 我們直接讀取，並將真正的欄位行（第二行）設為 header，或者利用 pandas 調整
-df = pd.read_excel(excel_url, sheet_name=0, skiprows=1)
+# 關鍵修正：指定讀取 'Data1' 工作表，並跳過前 9 行（ABS 標準時間序列格式的表頭宣告）
+df = pd.read_excel(excel_url, sheet_name='Data1', skiprows=9)
 
-# 如果發現第一欄叫做 'Period' 或 'Date'，我們統一處理
-if df.columns[0] != 'Period' and 'Period' in df.iloc[0].values:
-    # 有時候前幾行有雜訊，自動修正為以 Period 為標題的那一行
-    df.columns = df.iloc[0]
-    df = df[1:]
+# 重新命名第一欄為 Period (時間欄位)
+df.rename(columns={df.columns[0]: 'Period'}, inplace=True)
 
-# 4. 精準篩選我們需要的兩欄：Period 與 Weighted average of eight capital cities
+# 4. 精準篩選我們需要的兩欄
 target_col = 'Weighted average of eight capital cities'
 
-if target_col not in df.columns:
-    # 預防萬一欄位有名稱微調，用關鍵字搜尋
-    possible_cols = [col for col in df.columns if 'Weighted average' in str(col)]
-    if possible_cols:
-        target_col = possible_cols[0]
-    else:
-        raise Exception(f"找不到對應的 {target_col} 欄位！目前的欄位有：{list(df.columns)}")
+# 預防萬一欄位名稱前後有空格，先用關鍵字搜尋包含 "Weighted average" 的欄位
+possible_cols = [col for col in df.columns if 'Weighted average' in str(col)]
+
+if possible_cols:
+    target_col = possible_cols[0]
+else:
+    raise Exception(f"在 Data1 中依舊找不到對應的欄位！目前的欄位有：{list(df.columns[:3])} 等...")
 
 # 重新建立一個乾淨的 DataFrame，只留下季度和加權平均值
 df_clean = df[['Period', target_col]].dropna()
 
-# 5. 清洗與排序資料（讓最新的季度排在最下面或最上面，依你喜好，預設依時間順序）
-# 移除可能不小心中招的表格結尾附註（例如包含文字 "(a)" 的列）
+# 5. 清洗資料，只留下正確的季度格式列
 df_clean = df_clean[df_clean['Period'].astype(str).str.contains('March|June|September|December', case=False, na=False)]
 
 # 6. 儲存成 CSV
