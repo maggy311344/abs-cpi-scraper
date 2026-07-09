@@ -36,14 +36,21 @@ for idx, row in df_j.iterrows():
 # 建立乾淨的數據表
 df_clean = pd.DataFrame(data_rows).dropna()
 
-# 5. 精準將時間格式化為你指定的 "2025 September"
+# 5. 精準將時間格式化為網頁計算機需要的 "2025-Q2" 格式
 try:
     df_clean['Period'] = pd.to_datetime(df_clean['Period'])
-    # 只留下 quarterly 的月份（3月、6月、9月、12月）
-    df_clean = df_clean[df_clean['Period'].dt.month.isin([3, 6, 9, 12])]
-    df_clean['Period'] = df_clean['Period'].dt.strftime('%Y %B')
+    # 只留下官方季度的月份（3月、6月、9月、12月）
+    df_clean = df_clean[df_clean['Period'].dt.month.isin([3, 6, 9, 12])].copy()
+    
+    # 建立月份與 Q1~Q4 的對應字典
+    month_to_quarter = {3: 'Q1', 6: 'Q2', 9: 'Q3', 12: 'Q4'}
+    
+    # 利用 lambda 函數將年份與季度組合起來 (例如: 2025-Q2)
+    df_clean['Period'] = df_clean['Period'].apply(
+        lambda x: f"{x.year}-{month_to_quarter[x.month]}"
+    )
 except Exception as e:
-    pass
+    print(f"時間格式化轉換失敗: {e}")
 
 # 6. 將順序倒排（最新季度在最上面，完全對齊你的格式）
 df_output = df_clean.iloc[::-1].reset_index(drop=True)
